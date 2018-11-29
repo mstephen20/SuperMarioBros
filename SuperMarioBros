@@ -1,0 +1,719 @@
+
+function love.load()
+    love.graphics.setDefaultFilter('nearest', 'nearest')
+    love.graphics.setFont(gFonts['medium'])
+    love.window.setTitle('Super 50 Bros.')
+
+    math.randomseed(os.time())
+    
+    push:setupScreen(VIRTUAL_WIDTH, VIRTUAL_HEIGHT, WINDOW_WIDTH, WINDOW_HEIGHT, {
+        fullscreen = false,
+        vsync = true,
+        resizable = true
+    })
+
+    gStateMachine = StateMachine {
+        ['start'] = function() return StartState() end,
+        ['play'] = function() return PlayState() end
+    }
+    gStateMachine:change('start')
+
+    gSounds['music']:setLooping(true)
+    gSounds['music']:setVolume(0.5)
+    gSounds['music']:play()
+
+    love.keyboard.keysPressed = {}
+end
+
+function love.resize(w, h)
+    push:resize(w, h)
+end
+
+function love.keypressed(key)
+    if key == 'escape' then
+        love.event.quit()
+    end
+
+    love.keyboard.keysPressed[key] = true
+end
+
+function love.keyboard.wasPressed(key)
+    return love.keyboard.keysPressed[key]
+end
+
+function love.update(dt)
+    gStateMachine:update(dt)
+
+    love.keyboard.keysPressed = {}
+end
+
+function love.draw()
+    push:start()
+    gStateMachine:render()
+    push:finish()
+end
+
+Animation = Class{}
+
+function Animation:init(def)
+    self.frames = def.frames
+    self.interval = def.interval
+    self.timer = 0
+    self.currentFrame = 1
+end
+
+function Animation:update(dt)
+    if #self.frames > 1 then
+        self.timer = self.timer + dt
+
+        if self.timer > self.interval then
+            self.timer = self.timer % self.interval
+
+            self.currentFrame = math.max(1, (self.currentFrame + 1) % (#self.frames + 1))
+        end
+    end
+end
+
+function Animation:getCurrentFrame()
+    return self.frames[self.currentFrame]
+end
+
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
+
+VIRTUAL_WIDTH = 256
+VIRTUAL_HEIGHT = 144
+
+TILE_SIZE = 16
+
+SCREEN_TILE_WIDTH = VIRTUAL_WIDTH / TILE_SIZE
+SCREEN_TILE_HEIGHT = VIRTUAL_HEIGHT / TILE_SIZE
+
+CAMERA_SPEED = 100
+
+BACKGROUND_SCROLL_SPEED = 10
+
+TILE_SET_WIDTH = 5
+TILE_SET_HEIGHT = 4
+
+TILE_SETS_WIDE = 6
+TILE_SETS_TALL = 10
+
+TOPPER_SETS_WIDE = 6
+TOPPER_SETS_TALL = 18
+
+TOPPER_SETS = TOPPER_SETS_WIDE * TOPPER_SETS_TALL
+TILE_SETS = TILE_SETS_WIDE * TILE_SETS_TALL
+
+PLAYER_WALK_SPEED = 60
+
+PLAYER_JUMP_VELOCITY = -150
+
+SNAIL_MOVE_SPEED = 10
+
+TILE_ID_EMPTY = 5
+TILE_ID_GROUND = 3
+
+COLLIDABLE_TILES = {
+    TILE_ID_GROUND
+}
+
+BUSH_IDS = {
+    1, 2, 5, 6, 7
+}
+
+COIN_IDS = {
+    1, 2, 3
+}
+
+CRATES = {
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+}
+
+GEMS = {
+    1, 2, 3, 4, 5, 6, 7, 8
+}
+
+JUMP_BLOCKS = {}
+
+for i = 1, 30 do
+    table.insert(JUMP_BLOCKS, i)
+end
+
+Class = require 'lib/class'
+push = require 'lib/push'
+Timer = require 'lib/knife.timer'
+
+require 'src/constants'
+require 'src/StateMachine'
+require 'src/Util'
+
+require 'src/states/BaseState'
+require 'src/states/game/PlayState'
+require 'src/states/game/StartState'
+
+require 'src/states/entity/PlayerFallingState'
+require 'src/states/entity/PlayerIdleState'
+require 'src/states/entity/PlayerJumpState'
+require 'src/states/entity/PlayerWalkingState'
+
+require 'src/states/entity/snail/SnailChasingState'
+require 'src/states/entity/snail/SnailIdleState'
+require 'src/states/entity/snail/SnailMovingState'
+
+require 'src/Animation'
+require 'src/Entity'
+require 'src/GameObject'
+require 'src/GameLevel'
+require 'src/LevelMaker'
+require 'src/Player'
+require 'src/Snail'
+require 'src/Tile'
+require 'src/TileMap'
+
+
+gSounds = {
+    ['jump'] = love.audio.newSource('sounds/jump.wav'),
+    ['death'] = love.audio.newSource('sounds/death.wav'),
+    ['music'] = love.audio.newSource('sounds/music.wav'),
+    ['powerup-reveal'] = love.audio.newSource('sounds/powerup-reveal.wav'),
+    ['pickup'] = love.audio.newSource('sounds/pickup.wav'),
+    ['empty-block'] = love.audio.newSource('sounds/empty-block.wav'),
+    ['kill'] = love.audio.newSource('sounds/kill.wav'),
+    ['kill2'] = love.audio.newSource('sounds/kill2.wav')
+}
+
+gTextures = {
+    ['tiles'] = love.graphics.newImage('graphics/tiles.png'),
+    ['toppers'] = love.graphics.newImage('graphics/tile_tops.png'),
+    ['bushes'] = love.graphics.newImage('graphics/bushes_and_cacti.png'),
+    ['jump-blocks'] = love.graphics.newImage('graphics/jump_blocks.png'),
+    ['gems'] = love.graphics.newImage('graphics/gems.png'),
+    ['backgrounds'] = love.graphics.newImage('graphics/backgrounds.png'),
+    ['green-alien'] = love.graphics.newImage('graphics/green_alien.png'),
+    ['creatures'] = love.graphics.newImage('graphics/creatures.png')
+}
+
+gFrames = {
+    ['tiles'] = GenerateQuads(gTextures['tiles'], TILE_SIZE, TILE_SIZE),
+    
+    ['toppers'] = GenerateQuads(gTextures['toppers'], TILE_SIZE, TILE_SIZE),
+    
+    ['bushes'] = GenerateQuads(gTextures['bushes'], 16, 16),
+    ['jump-blocks'] = GenerateQuads(gTextures['jump-blocks'], 16, 16),
+    ['gems'] = GenerateQuads(gTextures['gems'], 16, 16),
+    ['backgrounds'] = GenerateQuads(gTextures['backgrounds'], 256, 128),
+    ['green-alien'] = GenerateQuads(gTextures['green-alien'], 16, 20),
+    ['creatures'] = GenerateQuads(gTextures['creatures'], 16, 16)
+}
+
+gFrames['tilesets'] = GenerateTileSets(gFrames['tiles'], 
+    TILE_SETS_WIDE, TILE_SETS_TALL, TILE_SET_WIDTH, TILE_SET_HEIGHT)
+
+gFrames['toppersets'] = GenerateTileSets(gFrames['toppers'], 
+    TOPPER_SETS_WIDE, TOPPER_SETS_TALL, TILE_SET_WIDTH, TILE_SET_HEIGHT)
+
+gFonts = {
+    ['small'] = love.graphics.newFont('fonts/font.ttf', 8),
+    ['medium'] = love.graphics.newFont('fonts/font.ttf', 16),
+    ['large'] = love.graphics.newFont('fonts/font.ttf', 32),
+    ['title'] = love.graphics.newFont('fonts/ArcadeAlternate.ttf', 32)
+}
+Entity = Class{}
+
+function Entity:init(def)
+    self.x = def.x
+    self.y = def.y
+
+    self.dx = 0
+    self.dy = 0
+
+    self.width = def.width
+    self.height = def.height
+
+    self.texture = def.texture
+    self.stateMachine = def.stateMachine
+
+    self.direction = 'left'
+
+    self.map = def.map
+
+    self.level = def.level
+end
+
+function Entity:changeState(state, params)
+    self.stateMachine:change(state, params)
+end
+
+function Entity:update(dt)
+    self.stateMachine:update(dt)
+end
+
+function Entity:collides(entity)
+    return not (self.x > entity.x + entity.width or entity.x > self.x + self.width or
+                self.y > entity.y + entity.height or entity.y > self.y + self.height)
+end
+
+function Entity:render()
+    love.graphics.draw(gTextures[self.texture], gFrames[self.texture][self.currentAnimation:getCurrentFrame()],
+        math.floor(self.x) + 8, math.floor(self.y) + 10, 0, self.direction == 'right' and 1 or -1, 1, 8, 10)
+end
+GameLevel = Class{}
+
+function GameLevel:init(entities, objects, tilemap)
+    self.entities = entities
+    self.objects = objects
+    self.tileMap = tilemap
+end
+
+function GameLevel:clear()
+    for i = #self.objects, 1, -1 do
+        if not self.objects[i] then
+            table.remove(self.objects, i)
+        end
+    end
+
+    for i = #self.entities, 1, -1 do
+        if not self.objects[i] then
+            table.remove(self.objects, i)
+        end
+    end
+end
+
+function GameLevel:update(dt)
+    self.tileMap:update(dt)
+
+    for k, object in pairs(self.objects) do
+        object:update(dt)
+    end
+
+    for k, entity in pairs(self.entities) do
+        entity:update(dt)
+    end
+end
+
+function GameLevel:render()
+    self.tileMap:render()
+
+    for k, object in pairs(self.objects) do
+        object:render()
+    end
+
+    for k, entity in pairs(self.entities) do
+        entity:render()
+    end
+end
+
+GameObject = Class{}
+
+function GameObject:init(def)
+    self.x = def.x
+    self.y = def.y
+    self.texture = def.texture
+    self.width = def.width
+    self.height = def.height
+    self.frame = def.frame
+    self.solid = def.solid
+    self.collidable = def.collidable
+    self.consumable = def.consumable
+    self.onCollide = def.onCollide
+    self.onConsume = def.onConsume
+    self.hit = def.hit
+end
+
+function GameObject:collides(target)
+    return not (target.x > self.x + self.width or self.x > target.x + target.width or
+            target.y > self.y + self.height or self.y > target.y + target.height)
+end
+
+function GameObject:update(dt)
+
+end
+
+function GameObject:render()
+    love.graphics.draw(gTextures[self.texture], gFrames[self.texture][self.frame], self.x, self.y)
+end
+
+LevelMaker = Class{}
+
+function LevelMaker.generate(width, height)
+    local tiles = {}
+    local entities = {}
+    local objects = {}
+
+    local tileID = TILE_ID_GROUND
+
+    local topper = true
+    local tileset = math.random(20)
+    local topperset = math.random(20)
+
+    for x = 1, height do
+        table.insert(tiles, {})
+    end
+
+    for x = 1, width do
+        local tileID = TILE_ID_EMPTY
+
+        for y = 1, 6 do
+            table.insert(tiles[y],
+                Tile(x, y, tileID, nil, tileset, topperset))
+        end
+
+        if math.random(7) == 1 then
+            for y = 7, height do
+                table.insert(tiles[y],
+                    Tile(x, y, tileID, nil, tileset, topperset))
+            end
+        else
+            tileID = TILE_ID_GROUND
+
+            local blockHeight = 4
+
+            for y = 7, height do
+                table.insert(tiles[y],
+                    Tile(x, y, tileID, y == 7 and topper or nil, tileset, topperset))
+            end
+
+            if math.random(8) == 1 then
+                blockHeight = 2
+
+                if math.random(8) == 1 then
+                    table.insert(objects,
+                        GameObject {
+                            texture = 'bushes',
+                            x = (x - 1) * TILE_SIZE,
+                            y = (4 - 1) * TILE_SIZE,
+                            width = 16,
+                            height = 16,
+
+                            frame = BUSH_IDS[math.random(#BUSH_IDS)] + (math.random(4) - 1) * 7
+                        }
+                    )
+                end
+
+                tiles[5][x] = Tile(x, 5, tileID, topper, tileset, topperset)
+                tiles[6][x] = Tile(x, 6, tileID, nil, tileset, topperset)
+                tiles[7][x].topper = nil
+
+            elseif math.random(8) == 1 then
+                table.insert(objects,
+                    GameObject {
+                        texture = 'bushes',
+                        x = (x - 1) * TILE_SIZE,
+                        y = (6 - 1) * TILE_SIZE,
+                        width = 16,
+                        height = 16,
+                        frame = BUSH_IDS[math.random(#BUSH_IDS)] + (math.random(4) - 1) * 7,
+                        collidable = false
+                    }
+                )
+            end
+
+            if math.random(10) == 1 then
+                table.insert(objects,
+
+                    GameObject {
+                        texture = 'jump-blocks',
+                        x = (x - 1) * TILE_SIZE,
+                        y = (blockHeight - 1) * TILE_SIZE,
+                        width = 16,
+                        height = 16,
+
+                        frame = math.random(#JUMP_BLOCKS),
+                        collidable = true,
+                        hit = false,
+                        solid = true,
+
+                        onCollide = function(obj)
+
+                            if not obj.hit then
+
+                                if math.random(5) == 1 then
+
+                                    local gem = GameObject {
+                                        texture = 'gems',
+                                        x = (x - 1) * TILE_SIZE,
+                                        y = (blockHeight - 1) * TILE_SIZE - 4,
+                                        width = 16,
+                                        height = 16,
+                                        frame = math.random(#GEMS),
+                                        collidable = true,
+                                        consumable = true,
+                                        solid = false,
+
+                                        onConsume = function(player, object)
+                                            gSounds['pickup']:play()
+                                            player.score = player.score + 100
+                                        end
+                                    }
+
+                                    Timer.tween(0.1, {
+                                        [gem] = {y = (blockHeight - 2) * TILE_SIZE}
+                                    })
+                                    gSounds['powerup-reveal']:play()
+
+                                    table.insert(objects, gem)
+                                end
+
+                                obj.hit = true
+                            end
+
+                            gSounds['empty-block']:play()
+                        end
+                    }
+                )
+            end
+        end
+    end
+
+    local map = TileMap(width, height)
+    map.tiles = tiles
+    
+    return GameLevel(entities, objects, map)
+end
+
+Player = Class{__includes = Entity}
+
+function Player:init(def)
+    Entity.init(self, def)
+    self.score = 0
+end
+
+function Player:update(dt)
+    Entity.update(self, dt)
+end
+
+function Player:render()
+    Entity.render(self)
+end
+
+function Player:checkLeftCollisions(dt)
+    local tileTopLeft = self.map:pointToTile(self.x + 1, self.y + 1)
+    local tileBottomLeft = self.map:pointToTile(self.x + 1, self.y + self.height - 1)
+
+    if (tileTopLeft and tileBottomLeft) and (tileTopLeft:collidable() or tileBottomLeft:collidable()) then
+        self.x = (tileTopLeft.x - 1) * TILE_SIZE + tileTopLeft.width - 1
+    else
+        
+        self.y = self.y - 1
+        local collidedObjects = self:checkObjectCollisions()
+        self.y = self.y + 1
+
+        if #collidedObjects > 0 then
+            self.x = self.x + PLAYER_WALK_SPEED * dt
+        end
+    end
+end
+
+function Player:checkRightCollisions(dt)
+    local tileTopRight = self.map:pointToTile(self.x + self.width - 1, self.y + 1)
+    local tileBottomRight = self.map:pointToTile(self.x + self.width - 1, self.y + self.height - 1)
+
+    if (tileTopRight and tileBottomRight) and (tileTopRight:collidable() or tileBottomRight:collidable()) then
+        self.x = (tileTopRight.x - 1) * TILE_SIZE - self.width
+    else
+        
+        self.y = self.y - 1
+        local collidedObjects = self:checkObjectCollisions()
+        self.y = self.y + 1
+
+        if #collidedObjects > 0 then
+            self.x = self.x - PLAYER_WALK_SPEED * dt
+        end
+    end
+end
+
+function Player:checkObjectCollisions()
+    local collidedObjects = {}
+
+    for k, object in pairs(self.level.objects) do
+        if object:collides(self) then
+            if object.solid then
+                table.insert(collidedObjects, object)
+            elseif object.consumable then
+                object.onConsume(self)
+                table.remove(self.level.objects, k)
+            end
+        end
+    end
+
+    return collidedObjects
+end
+
+Snail = Class{__includes = Entity}
+
+function Snail:init(def)
+    Entity.init(self, def)
+end
+
+function Snail:render()
+    love.graphics.draw(gTextures[self.texture], gFrames[self.texture][self.currentAnimation:getCurrentFrame()],
+        math.floor(self.x) + 8, math.floor(self.y) + 8, 0, self.direction == 'left' and 1 or -1, 1, 8, 10)
+end
+
+StateMachine = Class{}
+
+function StateMachine:init(states)
+self.empty = {
+render = function() end,
+update = function() end,
+enter = function() end,
+exit = function() end
+}
+self.states = states or {}
+self.current = self.empty
+end
+
+function StateMachine:change(stateName, enterParams)
+assert(self.states[stateName]) 
+self.current:exit()
+self.current = self.states[stateName]()
+self.current:enter(enterParams)
+end
+
+function StateMachine:update(dt)
+self.current:update(dt)
+end
+
+function StateMachine:render()
+self.current:render()
+end
+
+Tile = Class{}
+
+function Tile:init(x, y, id, topper, tileset, topperset)
+    self.x = x
+    self.y = y
+
+    self.width = TILE_SIZE
+    self.height = TILE_SIZE
+
+    self.id = id
+    self.tileset = tileset
+    self.topper = topper
+    self.topperset = topperset
+end
+
+function Tile:collidable(target)
+    for k, v in pairs(COLLIDABLE_TILES) do
+        if v == self.id then
+            return true
+        end
+    end
+
+    return false
+end
+
+function Tile:render()
+    love.graphics.draw(gTextures['tiles'], gFrames['tilesets'][self.tileset][self.id],
+        (self.x - 1) * TILE_SIZE, (self.y - 1) * TILE_SIZE)
+
+    if self.topper then
+        love.graphics.draw(gTextures['toppers'], gFrames['toppersets'][self.topperset][self.id],
+            (self.x - 1) * TILE_SIZE, (self.y - 1) * TILE_SIZE)
+    end
+end
+
+TileMap = Class{}
+
+function TileMap:init(width, height)
+    self.width = width
+    self.height = height
+    self.tiles = {}
+end
+
+function TileMap:update(dt)
+
+end
+
+function TileMap:pointToTile(x, y)
+    if x < 0 or x > self.width * TILE_SIZE or y < 0 or y > self.height * TILE_SIZE then
+        return nil
+    end
+    
+    return self.tiles[math.floor(y / TILE_SIZE) + 1][math.floor(x / TILE_SIZE) + 1]
+end
+
+function TileMap:render()
+    for y = 1, self.height do
+        for x = 1, self.width do
+            self.tiles[y][x]:render()
+        end
+    end
+end
+
+function GenerateQuads(atlas, tilewidth, tileheight)
+    local sheetWidth = atlas:getWidth() / tilewidth
+    local sheetHeight = atlas:getHeight() / tileheight
+
+    local sheetCounter = 1
+    local spritesheet = {}
+
+    for y = 0, sheetHeight - 1 do
+        for x = 0, sheetWidth - 1 do
+            spritesheet[sheetCounter] =
+                love.graphics.newQuad(x * tilewidth, y * tileheight, tilewidth,
+                tileheight, atlas:getDimensions())
+            sheetCounter = sheetCounter + 1
+        end
+    end
+
+    return spritesheet
+end
+
+function GenerateTileSets(quads, setsX, setsY, sizeX, sizeY)
+    local tilesets = {}
+    local tableCounter = 0
+    local sheetWidth = setsX * sizeX
+    local sheetHeight = setsY * sizeY
+
+    for tilesetY = 1, setsY do
+        for tilesetX = 1, setsX do
+
+            table.insert(tilesets, {})
+            tableCounter = tableCounter + 1
+
+            for y = sizeY * (tilesetY - 1) + 1, sizeY * (tilesetY - 1) + 1 + sizeY do
+                for x = sizeX * (tilesetX - 1) + 1, sizeX * (tilesetX - 1) + 1 + sizeX do
+                    table.insert(tilesets[tableCounter], quads[sheetWidth * (y - 1) + x])
+                end
+            end
+        end
+    end
+
+    return tilesets
+end
+
+function print_r ( t )
+    local print_r_cache={}
+    local function sub_print_r(t,indent)
+        if (print_r_cache[tostring(t)]) then
+            print(indent.."*"..tostring(t))
+        else
+            print_r_cache[tostring(t)]=true
+            if (type(t)=="table") then
+                for pos,val in pairs(t) do
+                    if (type(val)=="table") then
+                        print(indent.."["..pos.."] => "..tostring(t).." {")
+                        sub_print_r(val,indent..string.rep(" ",string.len(pos)+8))
+                        print(indent..string.rep(" ",string.len(pos)+6).."}")
+                    elseif (type(val)=="string") then
+                        print(indent.."["..pos..'] => "'..val..'"')
+                    else
+                        print(indent.."["..pos.."] => "..tostring(val))
+                    end
+                end
+            else
+                print(indent..tostring(t))
+            end
+        end
+    end
+    if (type(t)=="table") then
+        print(tostring(t).." {")
+        sub_print_r(t,"  ")
+        print("}")
+    else
+        sub_print_r(t,"  ")
+    end
+    print()
+end
